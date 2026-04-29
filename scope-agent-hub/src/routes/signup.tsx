@@ -6,8 +6,9 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
-import { Sparkles, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { createAdmin } from "@/lib/auth";
+import { ScopeLogo } from "@/components/ScopeLogo";
 
 export const Route = createFileRoute("/signup")({
   head: () => ({ meta: [{ title: "Create Admin — Scope Media Solution" }] }),
@@ -54,10 +55,8 @@ function SignupPage() {
       <Toaster richColors position="top-right" />
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="flex justify-center mb-6">
-            <div className="w-20 h-20 rounded-2xl bg-black overflow-hidden flex items-center justify-center border-2 border-primary/20 shadow-lg">
-              <img src="/logo.png" alt="Scope Media Logo" className="w-full h-full object-cover" />
-            </div>
+          <div className="flex justify-center mb-5">
+            <ScopeLogo size={72} />
           </div>
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 text-primary text-sm font-medium mb-4">
             Admin Setup

@@ -1,7 +1,8 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
-import { LogOut, Sparkles } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { setSession, type Session } from "@/lib/auth";
+import { ScopeLogo } from "@/components/ScopeLogo";
 
 export function DashboardShell({ session, children }: { session: Session; children: React.ReactNode }) {
   const navigate = useNavigate();
@@ -14,8 +15,8 @@ export function DashboardShell({ session, children }: { session: Session; childr
       <header className="border-b bg-card/80 backdrop-blur sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-3 group">
-            <div className="relative w-11 h-11 rounded-xl bg-card overflow-hidden flex items-center justify-center border border-border shadow-md transition-transform group-hover:scale-105">
-              <img src="/logo.png" alt="Scope Media Logo" className="w-full h-full object-contain p-0.5" />
+            <div className="transition-transform group-hover:scale-110">
+              <ScopeLogo size={40} />
             </div>
             <div className="flex flex-col">
               <span className="font-black text-xl leading-none tracking-tighter bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent uppercase">
