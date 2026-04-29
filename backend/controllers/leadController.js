@@ -44,6 +44,7 @@ exports.uploadLeads = async (req, res) => {
     let rawData = [];
     const buffer = req.file.buffer;
 
+    // 1. Read file safely
     if (req.file.originalname.endsWith(".csv")) {
       const csvString = buffer.toString();
       const parsed = Papa.parse(csvString, { header: true, skipEmptyLines: true });
@@ -60,89 +61,61 @@ exports.uploadLeads = async (req, res) => {
 
     const leadsToInsert = [];
     
-    // Extract unique pincodes
-    const uniquePincodes = [...new Set(rawData.map(r => String(r.pincode || r.Pincode || "").trim()))].filter(p => p.length === 6);
-    
-    console.log(`Processing ${rawData.length} rows with ${uniquePincodes.length} unique pincodes...`);
-
-    // We only fetch pincode data for smaller files or limited unique pincodes to avoid 500 timeout
-    const API_LIMIT = 50; 
-    const pinsToFetch = uniquePincodes.slice(0, API_LIMIT);
-    
-    if (uniquePincodes.length > 0) {
-      console.log(`Pre-fetching ${pinsToFetch.length} unique pincodes...`);
-      // Fetch data for unique pincodes in parallel batches
-      const batchSize = 10;
-      for (let i = 0; i < pinsToFetch.length; i += batchSize) {
-        const batch = pinsToFetch.slice(i, i + batchSize);
-        await Promise.allSettled(batch.map(pin => getPincodeData(pin)));
-      }
-    }
-
+    // 2. Process data with safety checks
     for (const row of rawData) {
       try {
-        const pin = String(row.pincode || row.Pincode || "").trim();
-        // Use cache if available, otherwise fallback to local logic for large files
-        let pinData = pincodeCache.get(pin);
-        
-        if (!pinData) {
-          // Local heuristic if API skipped or failed
-          pinData = { 
-            district: "Pending", 
-            state: "In Review", 
-            areaType: pin.endsWith("0") || pin.endsWith("1") ? "City" : "Village" 
-          };
-        }
-        
-        const phoneRaw = String(row.phone || row.Phone || row.Mobile || "").trim().replace(/\D/g, "");
-        
-        if (phoneRaw.length >= 10) {
-          const phone = phoneRaw.startsWith("91") ? phoneRaw : `91${phoneRaw.slice(-10)}`;
+        // Auto-detect column names
+        const rawPin = String(row.pincode || row.pin || row.PIN || row.Pin || row.Pincode || "").trim();
+        const rawName = String(row.name || row.Name || row.NAME || "Unknown").trim();
+        const rawPhone = String(row.phone || row.Phone || row.mobile || row.Mobile || row.PHONE || "").trim().replace(/\D/g, "");
+
+        // Basic validation
+        if (rawPhone.length >= 10 && rawPin.length === 6) {
+          const phone = rawPhone.startsWith("91") ? rawPhone : `91${rawPhone.slice(-10)}`;
+          
           leadsToInsert.push({
-            name: (row.name || row.Name || "Unknown").trim(),
-            phone,
-            pincode: pin,
-            district: pinData.district,
-            state: pinData.state,
-            areaType: pinData.areaType,
+            name: rawName,
+            phone: phone,
+            pincode: rawPin,
+            district: "Pending", // Temporarily disabled external API
+            state: "In Review",   // Temporarily disabled external API
+            areaType: rawPin.endsWith("0") || rawPin.endsWith("1") ? "City" : "Village",
             agentId: req.user.id,
             status: "pending",
             createdAt: new Date(),
           });
         }
       } catch (rowErr) {
-        console.error("Error processing row:", rowErr.message);
+        console.error("Row processing error:", rowErr.message);
       }
     }
 
     if (leadsToInsert.length === 0) {
-      return res.status(400).json({ message: "No valid data found in file (ensure phone and 6-digit pincode are present)" });
+      return res.status(400).json({ 
+        message: "No valid data found. Ensure columns like 'pincode' (6 digits) and 'phone' are present." 
+      });
     }
 
+    // 3. Bulk insert safely
     console.log(`Saving ${leadsToInsert.length} leads to database...`);
-    
-    // If there are many leads, insert in chunks to avoid MongoDB document size limits
-    const chunkSize = 1000;
-    for (let i = 0; i < leadsToInsert.length; i += chunkSize) {
-      const chunk = leadsToInsert.slice(i, i + chunkSize);
-      await Lead.insertMany(chunk);
-    }
+    await Lead.insertMany(leadsToInsert, { ordered: false });
 
-    // Update agent's totalLeads count in User model
+    // 4. Update agent stats
     const User = require("../models/User");
     await User.findByIdAndUpdate(req.user.id, {
       $inc: { totalLeads: leadsToInsert.length }
     });
 
-    res.status(201).json({ 
-      message: `${leadsToInsert.length} leads uploaded successfully`,
+    res.json({ 
+      message: "Upload successful", 
       count: leadsToInsert.length 
     });
-  } catch (err) {
-    console.error("CRITICAL UPLOAD ERROR:", err);
+
+  } catch (error) {
+    console.log("UPLOAD ERROR:", error);
     res.status(500).json({ 
       error: "Internal Server Error during upload", 
-      details: err.message 
+      details: error.message 
     });
   }
 };
