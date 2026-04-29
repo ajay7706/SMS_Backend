@@ -5,8 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
-import { toast } from "sonner";
-import { Sparkles } from "lucide-react";
+import { Sparkles, Loader2 } from "lucide-react";
 import { createAdmin } from "@/lib/auth";
 
 export const Route = createFileRoute("/signup")({
@@ -86,7 +85,14 @@ function SignupPage() {
                 <Input id="confirm" type="password" value={form.confirm} onChange={(e) => setForm({ ...form, confirm: e.target.value })} required />
               </div>
               <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? "Creating…" : "Create Admin Account"}
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Creating account...
+                  </>
+                ) : (
+                  "Create Admin Account"
+                )}
               </Button>
             </form>
             <p className="text-center text-sm text-muted-foreground mt-6">

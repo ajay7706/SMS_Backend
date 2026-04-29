@@ -8,7 +8,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { login, useSession, type Role } from "@/lib/auth";
 import { Toaster } from "@/components/ui/sonner";
-import { Sparkles } from "lucide-react";
+import { Sparkles, Loader2 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -104,7 +104,14 @@ function LoginPage() {
                 <Input id="password" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
               </div>
               <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? "Signing in…" : `Sign in as ${role === "admin" ? "Admin" : "Agent"}`}
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Signing in...
+                  </>
+                ) : (
+                  `Sign in as ${role === "admin" ? "Admin" : "Agent"}`
+                )}
               </Button>
             </form>
             {role === "admin" && (
