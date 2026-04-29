@@ -10,8 +10,7 @@ const router = getRouter();
 // Render the app
 const rootElement = document.getElementById('root');
 if (rootElement) {
-  const root = createRoot(rootElement);
-  root.render(
+  createRoot(rootElement).render(
     <StrictMode>
       <RouterProvider router={router} />
     </StrictMode>
