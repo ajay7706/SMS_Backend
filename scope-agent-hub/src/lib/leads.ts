@@ -6,6 +6,8 @@ export type Lead = {
   name: string;
   phone: string;
   pincode: string;
+  district?: string;
+  state?: string;
   areaType: "City" | "Village";
   status: "pending" | "tracked";
   createdAt: string;
@@ -74,9 +76,9 @@ export async function trackLead(id: string): Promise<boolean> {
   }
 }
 
-export async function sendWhatsApp(phone: string, name: string): Promise<string | null> {
+export async function sendWhatsApp(phone: string, name: string): Promise<boolean> {
   const session = getSession();
-  if (!session) return null;
+  if (!session) return false;
 
   try {
     const res = await fetch(`${API_URL}/whatsapp`, {
@@ -87,9 +89,8 @@ export async function sendWhatsApp(phone: string, name: string): Promise<string 
       },
       body: JSON.stringify({ phone, name }),
     });
-    const data = await res.json();
-    return res.ok ? data.url : null;
+    return res.ok;
   } catch (err) {
-    return null;
+    return false;
   }
 }

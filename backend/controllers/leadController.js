@@ -3,11 +3,35 @@ const XLSX = require("xlsx");
 const Papa = require("papaparse");
 const axios = require("axios");
 
-// Helper to detect City/Village from Pincode (Mock Logic)
-const detectAreaType = (pincode) => {
-  // Simple logic: Pincodes ending in 0, 1, or 2 are often urban hubs
-  const urbanSuffixes = ["0", "1", "2"];
-  return urbanSuffixes.includes(pincode.slice(-1)) ? "City" : "Village";
+const twilio = require("twilio");
+const axios = require("axios");
+
+// Initialize Twilio
+const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
+// Cache for pincode lookups to speed up processing
+const pincodeCache = new Map();
+
+const getPincodeData = async (pincode) => {
+  if (pincodeCache.has(pincode)) return pincodeCache.get(pincode);
+
+  try {
+    const res = await axios.get(`https://api.postalpincode.in/pincode/${pincode}`);
+    const data = res.data[0];
+    if (data.Status === "Success" && data.PostOffice && data.PostOffice.length > 0) {
+      const info = {
+        district: data.PostOffice[0].District,
+        state: data.PostOffice[0].State,
+        areaType: data.PostOffice[0].District ? "City" : "Village"
+      };
+      pincodeCache.set(pincode, info);
+      return info;
+    }
+  } catch (err) {
+    console.error(`Pincode API error for ${pincode}:`, err.message);
+  }
+  
+  return { district: "Unknown", state: "Unknown", areaType: "Village" };
 };
 
 // @desc    Upload and process leads from CSV/XLSX
@@ -35,25 +59,47 @@ exports.uploadLeads = async (req, res) => {
       return res.status(400).json({ message: "Maximum 14,000 rows allowed" });
     }
 
-    const leads = rawData.map((row) => ({
-      name: row.name || row.Name || "Unknown",
-      phone: row.phone || row.Phone || row.Mobile || "0000000000",
-      pincode: row.pincode || row.Pincode || "000000",
-      areaType: detectAreaType(String(row.pincode || "")),
-      agentId: req.user.id,
-      status: "pending",
-      createdAt: new Date(),
-    })).filter(l => l.phone !== "0000000000");
+    const leadsToInsert = [];
+    const uniquePincodes = [...new Set(rawData.map(r => String(r.pincode || r.Pincode || "").trim()))].filter(p => p.length === 6);
 
-    if (leads.length === 0) {
-      return res.status(400).json({ message: "No valid data found in file" });
+    console.log(`Processing ${rawData.length} rows with ${uniquePincodes.length} unique pincodes...`);
+
+    // Pre-fetch pincode data for all unique pincodes in the file
+    for (const pin of uniquePincodes) {
+      await getPincodeData(pin);
     }
 
-    await Lead.insertMany(leads);
+    for (const row of rawData) {
+      const pin = String(row.pincode || row.Pincode || "").trim();
+      const pinData = await getPincodeData(pin);
+      
+      const phone = String(row.phone || row.Phone || row.Mobile || "").trim().replace(/\D/g, "");
+      
+      if (phone.length >= 10) {
+        leadsToInsert.push({
+          name: (row.name || row.Name || "Unknown").trim(),
+          phone: phone.startsWith("91") ? phone : `91${phone.slice(-10)}`,
+          pincode: pin,
+          district: pinData.district,
+          state: pinData.state,
+          areaType: pinData.areaType,
+          agentId: req.user.id,
+          status: "pending",
+          createdAt: new Date(),
+        });
+      }
+    }
+
+    if (leadsToInsert.length === 0) {
+      return res.status(400).json({ message: "No valid data found in file (ensure phone and 6-digit pincode are present)" });
+    }
+
+    console.log(`Saving ${leadsToInsert.length} leads to database... Example:`, leadsToInsert[0]);
+    await Lead.insertMany(leadsToInsert);
 
     res.status(201).json({ 
-      message: `${leads.length} leads uploaded successfully`,
-      count: leads.length 
+      message: `${leadsToInsert.length} leads uploaded successfully`,
+      count: leadsToInsert.length 
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -110,6 +156,7 @@ exports.trackLead = async (req, res) => {
 // @route   POST /api/leads/whatsapp
 exports.sendWhatsApp = async (req, res) => {
   const { phone, name } = req.body;
+  const cleanPhone = phone.startsWith("91") ? phone : `91${phone}`;
 
   const message = `⚡ EcoPlug Charging Station ⚡
 
@@ -138,18 +185,19 @@ Thank you 🙏
 Team EcoPlug ⚡`;
 
   try {
-    // For production, use Meta Cloud API or Twilio.
-    // For now, we return a WhatsApp click-to-chat URL or mock the API success.
-    // If WHATSAPP_API_KEY exists, we'd call the real service.
-    
-    const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
-    
-    res.json({ 
-      success: true, 
-      message: "WhatsApp message generated", 
-      url: waUrl 
+    const result = await client.messages.create({
+      body: message,
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+      to: `whatsapp:+${cleanPhone}`,
     });
+
+    console.log(`WhatsApp sent to ${cleanPhone}: ${result.sid}`);
+    res.json({ success: true, message: "WhatsApp message sent via API" });
   } catch (err) {
-    res.status(500).json({ error: "Failed to send WhatsApp message" });
+    console.error("WhatsApp API Error:", err.response?.data || err.message);
+    res.status(500).json({ 
+      success: false, 
+      message: err.message.includes("not allowed") ? "Number not allowed in Sandbox" : "Failed to send message via API" 
+    });
   }
 };

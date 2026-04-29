@@ -82,12 +82,13 @@ function AgentPage() {
   };
 
   const handleWhatsApp = async (phone: string, name: string) => {
-    const url = await sendWhatsApp(phone, name);
-    if (url) {
-      window.open(url, "_blank");
-      toast.info("Opening WhatsApp...");
+    const res = await sendWhatsApp(phone, name);
+    // Since sendWhatsApp now returns a success status/url, 
+    // we handle it based on the new backend API call logic.
+    if (res) {
+      toast.success("WhatsApp message sent successfully via API");
     } else {
-      toast.error("Failed to generate WhatsApp link");
+      toast.error("Failed to send WhatsApp message");
     }
   };
 
@@ -160,6 +161,7 @@ function AgentPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead>Pincode</TableHead>
+                  <TableHead>District</TableHead>
                   <TableHead>Area Type</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -184,6 +186,7 @@ function AgentPage() {
                       <TableCell className="font-medium">{l.name}</TableCell>
                       <TableCell className="font-mono text-sm">{l.phone}</TableCell>
                       <TableCell>{l.pincode}</TableCell>
+                      <TableCell className="text-muted-foreground">{l.district || "—"}</TableCell>
                       <TableCell>
                         <span className={cn(
                           "inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium",
