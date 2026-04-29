@@ -60,18 +60,16 @@ exports.uploadLeads = async (req, res) => {
 
     const leadsToInsert = [];
     
-    // Process unique pincodes first to reduce API calls
+    // Extract unique pincodes
     const uniquePincodes = [...new Set(rawData.map(r => String(r.pincode || r.Pincode || "").trim()))].filter(p => p.length === 6);
     
     console.log(`Processing ${rawData.length} rows with ${uniquePincodes.length} unique pincodes...`);
 
-    // We process pincodes in batches to avoid overwhelming the external API or timing out
-    for (let i = 0; i < uniquePincodes.length; i++) {
-      try {
-        await getPincodeData(uniquePincodes[i]);
-      } catch (err) {
-        console.warn(`Failed to pre-fetch pincode ${uniquePincodes[i]}`);
-      }
+    // Fetch data for unique pincodes in parallel batches of 5 to avoid timeouts
+    const batchSize = 5;
+    for (let i = 0; i < uniquePincodes.length; i += batchSize) {
+      const batch = uniquePincodes.slice(i, i + batchSize);
+      await Promise.all(batch.map(pin => getPincodeData(pin)));
     }
 
     for (const row of rawData) {
@@ -104,8 +102,14 @@ exports.uploadLeads = async (req, res) => {
       return res.status(400).json({ message: "No valid data found in file (ensure phone and 6-digit pincode are present)" });
     }
 
-    console.log(`Saving ${leadsToInsert.length} leads to database... Example:`, leadsToInsert[0]);
-    await Lead.insertMany(leadsToInsert);
+    console.log(`Saving ${leadsToInsert.length} leads to database...`);
+    
+    // If there are many leads, insert in chunks to avoid MongoDB document size limits
+    const chunkSize = 1000;
+    for (let i = 0; i < leadsToInsert.length; i += chunkSize) {
+      const chunk = leadsToInsert.slice(i, i + chunkSize);
+      await Lead.insertMany(chunk);
+    }
 
     // Update agent's totalLeads count in User model
     const User = require("../models/User");
@@ -118,7 +122,8 @@ exports.uploadLeads = async (req, res) => {
       count: leadsToInsert.length 
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("Upload error:", err);
+    res.status(500).json({ error: "Failed to process upload. Please ensure file format is correct." });
   }
 };
 

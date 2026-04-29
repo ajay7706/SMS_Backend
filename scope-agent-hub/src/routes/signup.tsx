@@ -54,12 +54,16 @@ function SignupPage() {
       <Toaster richColors position="top-right" />
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
+          <div className="flex justify-center mb-6">
+            <div className="w-20 h-20 rounded-2xl bg-black overflow-hidden flex items-center justify-center border-2 border-primary/20 shadow-lg">
+              <img src="/logo.png" alt="Scope Media Logo" className="w-full h-full object-cover" />
+            </div>
+          </div>
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 text-primary text-sm font-medium mb-4">
-            <Sparkles className="w-4 h-4" />
             Admin Setup
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Scope Media Solution</h1>
-          <p className="text-sm text-muted-foreground mt-2">Create your admin account to get started</p>
+          <p className="text-sm text-muted-foreground mt-2 font-medium tracking-wide">Strategy. Growth. Results.</p>
         </div>
 
         <Card className="shadow-xl border-border/60">
