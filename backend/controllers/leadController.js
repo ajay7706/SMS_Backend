@@ -139,8 +139,11 @@ exports.uploadLeads = async (req, res) => {
       count: leadsToInsert.length 
     });
   } catch (err) {
-    console.error("Upload error:", err);
-    res.status(500).json({ error: "Failed to process upload. Please ensure file format is correct." });
+    console.error("CRITICAL UPLOAD ERROR:", err);
+    res.status(500).json({ 
+      error: "Internal Server Error during upload", 
+      details: err.message 
+    });
   }
 };
 

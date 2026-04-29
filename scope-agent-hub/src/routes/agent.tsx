@@ -60,14 +60,11 @@ function AgentPage() {
     if (res.ok) {
       toast.success(res.message);
       loadLeads(1);
-      if (session.agentId) {
-        // We could fetch real counts from backend if needed, 
-        // but for now we just refresh the UI.
-      }
     } else {
       toast.error(res.message);
     }
     setUploading(false);
+    if (inputRef.current) inputRef.current.value = "";
   };
 
   const handleTrack = async (id: string) => {
