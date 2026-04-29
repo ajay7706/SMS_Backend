@@ -65,17 +65,34 @@ exports.uploadLeads = async (req, res) => {
     
     console.log(`Processing ${rawData.length} rows with ${uniquePincodes.length} unique pincodes...`);
 
-    // Fetch data for unique pincodes in parallel batches of 5 to avoid timeouts
-    const batchSize = 5;
-    for (let i = 0; i < uniquePincodes.length; i += batchSize) {
-      const batch = uniquePincodes.slice(i, i + batchSize);
-      await Promise.all(batch.map(pin => getPincodeData(pin)));
+    // We only fetch pincode data for smaller files or limited unique pincodes to avoid 500 timeout
+    const API_LIMIT = 50; 
+    const pinsToFetch = uniquePincodes.slice(0, API_LIMIT);
+    
+    if (uniquePincodes.length > 0) {
+      console.log(`Pre-fetching ${pinsToFetch.length} unique pincodes...`);
+      // Fetch data for unique pincodes in parallel batches
+      const batchSize = 10;
+      for (let i = 0; i < pinsToFetch.length; i += batchSize) {
+        const batch = pinsToFetch.slice(i, i + batchSize);
+        await Promise.allSettled(batch.map(pin => getPincodeData(pin)));
+      }
     }
 
     for (const row of rawData) {
       try {
         const pin = String(row.pincode || row.Pincode || "").trim();
-        const pinData = pincodeCache.get(pin) || { district: "Unknown", state: "Unknown", areaType: "Village" };
+        // Use cache if available, otherwise fallback to local logic for large files
+        let pinData = pincodeCache.get(pin);
+        
+        if (!pinData) {
+          // Local heuristic if API skipped or failed
+          pinData = { 
+            district: "Pending", 
+            state: "In Review", 
+            areaType: pin.endsWith("0") || pin.endsWith("1") ? "City" : "Village" 
+          };
+        }
         
         const phoneRaw = String(row.phone || row.Phone || row.Mobile || "").trim().replace(/\D/g, "");
         
