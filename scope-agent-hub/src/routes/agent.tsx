@@ -1,14 +1,14 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import * as XLSX from "xlsx";
 import { useSession, incrementAgentStats } from "@/lib/auth";
+import { fetchLeads, uploadLeads, trackLead, sendWhatsApp, type Lead } from "@/lib/leads";
 import { DashboardShell } from "@/components/DashboardShell";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
-import { Upload, CheckCircle2, MessageCircle, FileSpreadsheet } from "lucide-react";
+import { Upload, CheckCircle2, MessageCircle, FileSpreadsheet, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/agent")({
@@ -16,30 +16,13 @@ export const Route = createFileRoute("/agent")({
   component: AgentPage,
 });
 
-type Lead = {
-  id: string;
-  name: string;
-  mobile: string;
-  pincode: string;
-  type: string;
-  tricked: boolean;
-};
-
-function pick(row: Record<string, unknown>, keys: string[]): string {
-  for (const k of Object.keys(row)) {
-    const nk = k.toLowerCase().replace(/[\s_-]/g, "");
-    if (keys.some((t) => nk.includes(t))) {
-      const v = row[k];
-      if (v !== null && v !== undefined) return String(v);
-    }
-  }
-  return "";
-}
-
 function AgentPage() {
   const session = useSession();
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [pagination, setPagination] = useState({ total: 0, page: 1, pages: 1 });
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isClient, setIsClient] = useState(false);
@@ -48,67 +31,71 @@ function AgentPage() {
     setIsClient(true);
   }, []);
 
+  const loadLeads = async (page: number) => {
+    setLoading(true);
+    const data = await fetchLeads(page, 15);
+    if (data) {
+      setLeads(data.leads);
+      setPagination(data.pagination);
+    }
+    setLoading(false);
+  };
+
   useEffect(() => {
     if (isClient) {
       if (session === null) navigate({ to: "/" });
       else if (session && session.role !== "agent") navigate({ to: "/admin" });
+      else loadLeads(1);
     }
   }, [session, navigate, isClient]);
 
   if (!isClient) return null;
   if (!session || session.role !== "agent") return null;
 
-  const parseFile = async (file: File) => {
-    try {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
-      if (!rows.length) return toast.error("File is empty");
-      const parsed: Lead[] = rows.map((r, i) => ({
-        id: `${Date.now()}-${i}`,
-        name: pick(r, ["name"]) || "—",
-        mobile: pick(r, ["mobile", "phone", "number", "contact"]),
-        pincode: pick(r, ["pincode", "pin", "zip"]),
-        type: (pick(r, ["type", "area", "location"]) || "City").toString(),
-        tricked: false,
-      }));
-      setLeads(parsed);
-      if (session.agentId) await incrementAgentStats(session.agentId, "totalLeads", parsed.length);
-      toast.success(`Loaded ${parsed.length} leads`);
-    } catch {
-      toast.error("Failed to parse file. Use CSV or XLSX.");
+  const handleFileUpload = async (file: File) => {
+    setUploading(true);
+    const res = await uploadLeads(file);
+    if (res.ok) {
+      toast.success(res.message);
+      loadLeads(1);
+      if (session.agentId) {
+        // We could fetch real counts from backend if needed, 
+        // but for now we just refresh the UI.
+      }
+    } else {
+      toast.error(res.message);
+    }
+    setUploading(false);
+  };
+
+  const handleTrack = async (id: string) => {
+    const ok = await trackLead(id);
+    if (ok) {
+      toast.success("Lead marked as tracked");
+      setLeads(prev => prev.map(l => l._id === id ? { ...l, status: "tracked" } : l));
+      if (session.agentId) {
+        await incrementAgentStats(session.agentId, "totalTricked", 1);
+      }
+    } else {
+      toast.error("Failed to update status");
     }
   };
 
-  const handleTrick = async (id: string) => {
-    const lead = leads.find((l) => l.id === id);
-    if (!lead || lead.tricked) return;
-
-    if (session.agentId) {
-      await incrementAgentStats(session.agentId, "totalTricked", 1);
+  const handleWhatsApp = async (phone: string, name: string) => {
+    const url = await sendWhatsApp(phone, name);
+    if (url) {
+      window.open(url, "_blank");
+      toast.info("Opening WhatsApp...");
+    } else {
+      toast.error("Failed to generate WhatsApp link");
     }
-
-    setLeads((prev) =>
-      prev.map((l) => {
-        if (l.id !== id) return l;
-        return { ...l, tricked: true };
-      })
-    );
-  };
-
-  const handleWhatsApp = (mobile: string, name: string) => {
-    const clean = mobile.replace(/\D/g, "");
-    if (!clean) return toast.error("Invalid mobile number");
-    const text = encodeURIComponent(`Hello ${name}, this is ${session.name} from Scope Media Solution.`);
-    window.open(`https://wa.me/${clean}?text=${text}`, "_blank");
   };
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     const f = e.dataTransfer.files?.[0];
-    if (f) parseFile(f);
+    if (f) handleFileUpload(f);
   };
 
   return (
@@ -122,75 +109,115 @@ function AgentPage() {
       <Card className="mb-8">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><FileSpreadsheet className="w-5 h-5" />Upload leads</CardTitle>
-          <CardDescription>Supported: CSV, XLSX. Columns: Name, Mobile, Pincode, Type.</CardDescription>
+          <CardDescription>Supported: CSV, XLSX. Max 14k rows. Automatically deleted after 14 days.</CardDescription>
         </CardHeader>
         <CardContent>
           <div
             onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
             onDrop={onDrop}
-            onClick={() => inputRef.current?.click()}
+            onClick={() => !uploading && inputRef.current?.click()}
             className={cn(
               "border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors",
-              dragOver ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-secondary/50"
+              dragOver ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-secondary/50",
+              uploading && "opacity-50 cursor-not-allowed"
             )}
           >
-            <Upload className="w-10 h-10 mx-auto text-primary mb-3" />
-            <div className="font-medium">Drop file here or click to browse</div>
-            <div className="text-xs text-muted-foreground mt-1">CSV or XLSX up to a few MB</div>
+            {uploading ? (
+              <Loader2 className="w-10 h-10 mx-auto text-primary mb-3 animate-spin" />
+            ) : (
+              <Upload className="w-10 h-10 mx-auto text-primary mb-3" />
+            )}
+            <div className="font-medium">{uploading ? "Processing file..." : "Drop file here or click to browse"}</div>
+            <div className="text-xs text-muted-foreground mt-1">CSV or XLSX (Name, Phone, Pincode)</div>
             <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) parseFile(f); e.target.value = ""; }} />
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileUpload(f); e.target.value = ""; }} />
           </div>
         </CardContent>
       </Card>
 
-      {leads.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Leads ({leads.length})</CardTitle>
-            <CardDescription>{leads.filter(l => l.tricked).length} tricked</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="rounded-lg border overflow-hidden">
-              <Table>
-                <TableHeader>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>Leads Management</CardTitle>
+            <CardDescription>Track status and contact leads via WhatsApp.</CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => loadLeads(pagination.page - 1)} disabled={pagination.page <= 1 || loading}>
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+            <span className="text-xs font-medium">Page {pagination.page} of {pagination.pages}</span>
+            <Button variant="outline" size="sm" onClick={() => loadLeads(pagination.page + 1)} disabled={pagination.page >= pagination.pages || loading}>
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-lg border overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Pincode</TableHead>
+                  <TableHead>Area Type</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loading ? (
                   <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Mobile</TableHead>
-                    <TableHead>Pincode</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    <TableCell colSpan={6} className="text-center py-10">
+                      <Loader2 className="w-6 h-6 mx-auto animate-spin text-primary" />
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {leads.map((l) => (
-                    <TableRow key={l.id} className={cn(l.tricked && "bg-success/30 hover:bg-success/40")}>
+                ) : leads.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center py-10 text-muted-foreground">
+                      No leads found. Upload a file to get started.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  leads.map((l) => (
+                    <TableRow key={l._id} className={cn(l.status === "tracked" && "bg-success/10")}>
                       <TableCell className="font-medium">{l.name}</TableCell>
-                      <TableCell className="font-mono text-sm">{l.mobile}</TableCell>
+                      <TableCell className="font-mono text-sm">{l.phone}</TableCell>
                       <TableCell>{l.pincode}</TableCell>
                       <TableCell>
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-accent text-accent-foreground text-xs font-medium">
-                          {l.type}
+                        <span className={cn(
+                          "inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium",
+                          l.areaType === "City" ? "bg-blue-100 text-blue-700" : "bg-orange-100 text-orange-700"
+                        )}>
+                          {l.areaType}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className={cn(
+                          "inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium",
+                          l.status === "tracked" ? "bg-success text-success-foreground" : "bg-muted text-muted-foreground"
+                        )}>
+                          {l.status}
                         </span>
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="inline-flex gap-2">
-                          <Button size="sm" variant={l.tricked ? "secondary" : "default"} onClick={() => handleTrick(l.id)} disabled={l.tricked}>
-                            <CheckCircle2 className="w-4 h-4 mr-1" />{l.tricked ? "Tricked" : "Trick"}
+                          <Button size="sm" variant={l.status === "tracked" ? "secondary" : "default"} onClick={() => handleTrack(l._id)} disabled={l.status === "tracked"}>
+                            <CheckCircle2 className="w-4 h-4 mr-1" />{l.status === "tracked" ? "Tracked" : "Track"}
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => handleWhatsApp(l.mobile, l.name)}>
+                          <Button size="sm" variant="outline" className="border-success/50 hover:bg-success/10 text-success-foreground" onClick={() => handleWhatsApp(l.phone, l.name)}>
                             <MessageCircle className="w-4 h-4 mr-1" />WhatsApp
                           </Button>
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
     </DashboardShell>
   );
 }
