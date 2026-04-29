@@ -14,9 +14,8 @@ export function DashboardShell({ session, children }: { session: Session; childr
       <header className="border-b bg-card/80 backdrop-blur sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-3 group">
-            <div className="relative w-11 h-11 rounded-xl bg-black overflow-hidden flex items-center justify-center border-2 border-primary/30 shadow-2xl transition-transform group-hover:scale-105">
-              <img src="/logo.png" alt="Scope Media Logo" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-gradient-to-tr from-primary/20 to-transparent pointer-events-none" />
+            <div className="relative w-11 h-11 rounded-xl bg-card overflow-hidden flex items-center justify-center border border-border shadow-md transition-transform group-hover:scale-105">
+              <img src="/logo.png" alt="Scope Media Logo" className="w-full h-full object-contain p-0.5" />
             </div>
             <div className="flex flex-col">
               <span className="font-black text-xl leading-none tracking-tighter bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent uppercase">

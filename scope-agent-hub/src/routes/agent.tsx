@@ -159,6 +159,7 @@ function AgentPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-12 text-center">#</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead>Pincode</TableHead>
@@ -175,15 +176,18 @@ function AgentPage() {
                       <Loader2 className="w-6 h-6 mx-auto animate-spin text-primary" />
                     </TableCell>
                   </TableRow>
-                ) : leads.length === 0 ? (
+                                ) : leads.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-10 text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
                       No leads found. Upload a file to get started.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  leads.map((l) => (
+                  leads.map((l, index) => (
                     <TableRow key={l._id} className={cn(l.status === "tracked" && "bg-success/10")}>
+                      <TableCell className="text-center text-xs font-mono text-muted-foreground">
+                        {(pagination.page - 1) * 15 + index + 1}
+                      </TableCell>
                       <TableCell className="font-medium">{l.name}</TableCell>
                       <TableCell className="font-mono text-sm">{l.phone}</TableCell>
                       <TableCell>{l.pincode}</TableCell>
