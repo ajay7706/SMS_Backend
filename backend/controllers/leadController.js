@@ -96,6 +96,12 @@ exports.uploadLeads = async (req, res) => {
     console.log(`Saving ${leadsToInsert.length} leads to database... Example:`, leadsToInsert[0]);
     await Lead.insertMany(leadsToInsert);
 
+    // Update agent's totalLeads count in User model
+    const User = require("../models/User");
+    await User.findByIdAndUpdate(req.user.id, {
+      $inc: { totalLeads: leadsToInsert.length }
+    });
+
     res.status(201).json({ 
       message: `${leadsToInsert.length} leads uploaded successfully`,
       count: leadsToInsert.length 

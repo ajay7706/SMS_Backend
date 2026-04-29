@@ -23,6 +23,8 @@ function AgentPage() {
   const [pagination, setPagination] = useState({ total: 0, page: 1, pages: 1 });
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [trackingId, setTrackingId] = useState<string | null>(null);
+  const [whatsappingPhone, setWhatsappingPhone] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isClient, setIsClient] = useState(false);
@@ -69,6 +71,7 @@ function AgentPage() {
   };
 
   const handleTrack = async (id: string) => {
+    setTrackingId(id);
     const ok = await trackLead(id);
     if (ok) {
       toast.success("Lead marked as tracked");
@@ -79,9 +82,11 @@ function AgentPage() {
     } else {
       toast.error("Failed to update status");
     }
+    setTrackingId(null);
   };
 
   const handleWhatsApp = async (phone: string, name: string) => {
+    setWhatsappingPhone(phone);
     const res = await sendWhatsApp(phone, name);
     // Since sendWhatsApp now returns a success status/url, 
     // we handle it based on the new backend API call logic.
@@ -90,6 +95,7 @@ function AgentPage() {
     } else {
       toast.error("Failed to send WhatsApp message");
     }
+    setWhatsappingPhone(null);
   };
 
   const onDrop = (e: React.DragEvent) => {
@@ -205,11 +211,13 @@ function AgentPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="inline-flex gap-2">
-                          <Button size="sm" variant={l.status === "tracked" ? "secondary" : "default"} onClick={() => handleTrack(l._id)} disabled={l.status === "tracked"}>
-                            <CheckCircle2 className="w-4 h-4 mr-1" />{l.status === "tracked" ? "Tracked" : "Track"}
+                          <Button size="sm" variant={l.status === "tracked" ? "secondary" : "default"} onClick={() => handleTrack(l._id)} disabled={l.status === "tracked" || trackingId === l._id}>
+                            {trackingId === l._id ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-1" />}
+                            {l.status === "tracked" ? "Tracked" : trackingId === l._id ? "Tracking..." : "Track"}
                           </Button>
-                          <Button size="sm" variant="outline" className="border-success/50 hover:bg-success/10 text-success-foreground" onClick={() => handleWhatsApp(l.phone, l.name)}>
-                            <MessageCircle className="w-4 h-4 mr-1" />WhatsApp
+                          <Button size="sm" variant="outline" className="border-success/50 hover:bg-success/10 text-success-foreground" onClick={() => handleWhatsApp(l.phone, l.name)} disabled={whatsappingPhone === l.phone}>
+                            {whatsappingPhone === l.phone ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageCircle className="w-4 h-4 mr-1" />}
+                            {whatsappingPhone === l.phone ? "Sending..." : "WhatsApp"}
                           </Button>
                         </div>
                       </TableCell>
