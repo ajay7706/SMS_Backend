@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ENDPOINTS } from "./api";
 
 export type Role = "admin" | "agent";
 
@@ -17,7 +18,7 @@ export type Session = { role: Role; name: string; email: string; token: string; 
 const SESSION_KEY = "sms_session";
 const AGENTS_KEY = "sms_agents";
 const ADMINS_KEY = "sms_admins";
-const API_URL = "http://localhost:5000/api/auth";
+const API_URL = ENDPOINTS.AUTH;
 
 export function getSession(): Session | null {
   if (typeof window === "undefined") return null;
@@ -115,7 +116,7 @@ export function useSession() {
   return session;
 }
 
-const USERS_URL = "http://localhost:5000/api/users";
+const USERS_URL = ENDPOINTS.USERS;
 
 export function useAgents() {
   const [agents, setState] = useState<Agent[]>([]);
