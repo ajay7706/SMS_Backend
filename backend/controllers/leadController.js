@@ -59,33 +59,44 @@ exports.uploadLeads = async (req, res) => {
     }
 
     const leadsToInsert = [];
+    
+    // Process unique pincodes first to reduce API calls
     const uniquePincodes = [...new Set(rawData.map(r => String(r.pincode || r.Pincode || "").trim()))].filter(p => p.length === 6);
-
+    
     console.log(`Processing ${rawData.length} rows with ${uniquePincodes.length} unique pincodes...`);
 
-    // Pre-fetch pincode data for all unique pincodes in the file
-    for (const pin of uniquePincodes) {
-      await getPincodeData(pin);
+    // We process pincodes in batches to avoid overwhelming the external API or timing out
+    for (let i = 0; i < uniquePincodes.length; i++) {
+      try {
+        await getPincodeData(uniquePincodes[i]);
+      } catch (err) {
+        console.warn(`Failed to pre-fetch pincode ${uniquePincodes[i]}`);
+      }
     }
 
     for (const row of rawData) {
-      const pin = String(row.pincode || row.Pincode || "").trim();
-      const pinData = await getPincodeData(pin);
-      
-      const phone = String(row.phone || row.Phone || row.Mobile || "").trim().replace(/\D/g, "");
-      
-      if (phone.length >= 10) {
-        leadsToInsert.push({
-          name: (row.name || row.Name || "Unknown").trim(),
-          phone: phone.startsWith("91") ? phone : `91${phone.slice(-10)}`,
-          pincode: pin,
-          district: pinData.district,
-          state: pinData.state,
-          areaType: pinData.areaType,
-          agentId: req.user.id,
-          status: "pending",
-          createdAt: new Date(),
-        });
+      try {
+        const pin = String(row.pincode || row.Pincode || "").trim();
+        const pinData = pincodeCache.get(pin) || { district: "Unknown", state: "Unknown", areaType: "Village" };
+        
+        const phoneRaw = String(row.phone || row.Phone || row.Mobile || "").trim().replace(/\D/g, "");
+        
+        if (phoneRaw.length >= 10) {
+          const phone = phoneRaw.startsWith("91") ? phoneRaw : `91${phoneRaw.slice(-10)}`;
+          leadsToInsert.push({
+            name: (row.name || row.Name || "Unknown").trim(),
+            phone,
+            pincode: pin,
+            district: pinData.district,
+            state: pinData.state,
+            areaType: pinData.areaType,
+            agentId: req.user.id,
+            status: "pending",
+            createdAt: new Date(),
+          });
+        }
+      } catch (rowErr) {
+        console.error("Error processing row:", rowErr.message);
       }
     }
 
