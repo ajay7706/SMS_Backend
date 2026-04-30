@@ -1,0 +1,15 @@
+{
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "files.exclude": {
+    "**/.tanstack/tmp": true,
+    "**/.tanstack/tmp/**": true
+  },
+  "search.exclude": {
+    "**/.tanstack": true
+  },
+  "files.watcherExclude": {
+    "**/.tanstack/tmp/**": true
+  },
+  "typescript.tsserver.experimental.enableProjectDiagnostics": false,
+  "eslint.workingDirectories": ["."]
+}
