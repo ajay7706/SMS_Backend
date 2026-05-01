@@ -8,8 +8,8 @@ exports.register = async (req, res) => {
     const { name, email, password, role } = req.body;
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Check if user already exists
-    const userExists = await User.findOne({ email: normalizedEmail });
+    // Fast check if user exists
+    const userExists = await User.exists({ email: normalizedEmail });
     if (userExists) {
       return res.status(400).json({ message: "User already exists" });
     }
@@ -35,9 +35,11 @@ exports.login = async (req, res) => {
     const { email, password } = req.body;
     const normalizedEmail = email.trim().toLowerCase();
 
-    const user = await User.findOne({ email: normalizedEmail, deletedAt: null });
+    // Use lean() for faster fetching of read-only data
+    const user = await User.findOne({ email: normalizedEmail, deletedAt: null }).lean();
     if (!user) return res.status(400).json({ message: "Invalid credentials or account deleted" });
 
+    // bcrypt.compare is the bottleneck, but 10 rounds is necessary for security
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch)
       return res.status(400).json({ message: "Invalid credentials" });
@@ -75,3 +77,4 @@ exports.resetPassword = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+

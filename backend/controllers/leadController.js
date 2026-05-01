@@ -1,4 +1,5 @@
 const Lead = require("../models/Lead");
+const DeletedLog = require("../models/DeletedLog");
 const XLSX = require("xlsx");
 const Papa = require("papaparse");
 const axios = require("axios");
@@ -12,16 +13,32 @@ const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TO
 const pincodeCache = new Map();
 
 const getPincodeData = async (pincode) => {
+  if (!pincode || pincode.length !== 6) return { district: "N/A", state: "N/A", areaType: "Village" };
   if (pincodeCache.has(pincode)) return pincodeCache.get(pincode);
 
   try {
     const res = await axios.get(`https://api.postalpincode.in/pincode/${pincode}`);
     const data = res.data[0];
     if (data.Status === "Success" && data.PostOffice && data.PostOffice.length > 0) {
+      const office = data.PostOffice[0];
+      
+      // Better heuristic for City vs Village
+      // 1. Urban metros prefixes
+      const urbanPrefixes = ["11", "40", "56", "60", "70", "38", "50", "20"]; 
+      const isUrbanPrefix = urbanPrefixes.some(p => pincode.startsWith(p));
+      
+      // 2. Urban Pincodes often end in 0 or 1 (Head Offices)
+      const isHO = pincode.endsWith("0") || pincode.endsWith("1");
+      
+      // 3. If there are many post offices for one pincode, it's usually a City
+      const isHighDensity = data.PostOffice.length > 5;
+
+      const areaType = (isUrbanPrefix || isHO || isHighDensity) ? "City" : "Village";
+
       const info = {
-        district: data.PostOffice[0].District,
-        state: data.PostOffice[0].State,
-        areaType: data.PostOffice[0].District ? "City" : "Village"
+        district: office.District,
+        state: office.State,
+        areaType
       };
       pincodeCache.set(pincode, info);
       return info;
@@ -30,21 +47,24 @@ const getPincodeData = async (pincode) => {
     console.error(`Pincode API error for ${pincode}:`, err.message);
   }
   
-  return { district: "Unknown", state: "Unknown", areaType: "Village" };
+  // Fallback
+  const areaType = pincode.endsWith("0") || pincode.endsWith("1") ? "City" : "Village";
+  return { district: "Unknown", state: "Unknown", areaType };
 };
+
+
 
 // @desc    Upload and process leads from CSV/XLSX
 // @route   POST /api/leads/upload
 exports.uploadLeads = async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ message: "Please upload a file" });
-    }
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
-    let rawData = [];
     const buffer = req.file.buffer;
 
-    // 1. Read file safely
+    let rawData = [];
+
+    // Parse CSV or Excel
     if (req.file.originalname.endsWith(".csv")) {
       const csvString = buffer.toString();
       const parsed = Papa.parse(csvString, { header: true, skipEmptyLines: true });
@@ -55,100 +75,222 @@ exports.uploadLeads = async (req, res) => {
       rawData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
     }
 
-    if (rawData.length > 14000) {
-      return res.status(400).json({ message: "Maximum 14,000 rows allowed" });
-    }
+    console.log("Parsed Data Batch:", rawData.slice(0, 5)); // Debug first 5 rows
 
     const leadsToInsert = [];
     
-    // 2. Process data with safety checks
+    // Process rows without strict validation
     for (const row of rawData) {
       try {
-        // Auto-detect column names
-        const rawPin = String(row.pincode || row.pin || row.PIN || row.Pin || row.Pincode || "").trim();
-        const rawName = String(row.name || row.Name || row.NAME || "Unknown").trim();
-        const rawPhone = String(row.phone || row.Phone || row.mobile || row.Mobile || row.PHONE || "").trim().replace(/\D/g, "");
+        if (!row || Object.keys(row).length === 0) continue;
 
-        // Basic validation
-        if (rawPhone.length >= 10 && rawPin.length === 6) {
-          const phone = rawPhone.startsWith("91") ? rawPhone : `91${rawPhone.slice(-10)}`;
-          
-          leadsToInsert.push({
-            name: rawName,
-            phone: phone,
-            pincode: rawPin,
-            district: "Pending", // Temporarily disabled external API
-            state: "In Review",   // Temporarily disabled external API
-            areaType: rawPin.endsWith("0") || rawPin.endsWith("1") ? "City" : "Village",
-            agentId: req.user.id,
-            status: "pending",
-            createdAt: new Date(),
-          });
+        // Case-insensitive mapping
+        const getVal = (obj, keys) => {
+          const foundKey = Object.keys(obj).find(k => keys.some(pk => pk.toLowerCase() === k.toLowerCase().trim()));
+          return foundKey ? String(obj[foundKey]).trim() : "";
+        };
+
+        const name = getVal(row, ["name", "full name", "customer name", "lead name"]);
+        const rawPhone = getVal(row, ["phone", "mobile", "mobile number", "contact", "phone number"]);
+        const phone = rawPhone.replace(/\D/g, "");
+        const pincode = getVal(row, ["pincode", "pin", "pin code", "zip", "zipcode"]);
+
+        // Pincode Data Fetch
+        let pinData = { district: "", state: "", areaType: "City" };
+        if (pincode) {
+          pinData = await getPincodeData(pincode);
         }
-      } catch (rowErr) {
-        console.error("Row processing error:", rowErr.message);
+
+        leadsToInsert.push({
+          ...row, // Store all dynamic data
+          name: name || "Unknown",
+          phone: phone,
+          pincode: pincode,
+          district: pinData.district,
+          state: pinData.state,
+          areaType: pinData.areaType,
+          agentId: req.user.id,
+          status: "pending",
+          createdAt: new Date(),
+        });
+      } catch (err) {
+        console.log("Row skip error:", err.message);
       }
     }
 
-    if (leadsToInsert.length === 0) {
-      return res.status(400).json({ 
-        message: "No valid data found. Ensure columns like 'pincode' (6 digits) and 'phone' are present." 
+    if (leadsToInsert.length > 0) {
+      // insertMany with ordered: false to skip duplicates/errors instead of failing
+      await Lead.insertMany(leadsToInsert, { ordered: false });
+      
+      const User = require("../models/User");
+      await User.findByIdAndUpdate(req.user.id, {
+        $inc: { totalLeads: leadsToInsert.length }
       });
     }
 
-    // 3. Bulk insert safely
-    console.log(`Saving ${leadsToInsert.length} leads to database...`);
-    await Lead.insertMany(leadsToInsert, { ordered: false });
-
-    // 4. Update agent stats
-    const User = require("../models/User");
-    await User.findByIdAndUpdate(req.user.id, {
-      $inc: { totalLeads: leadsToInsert.length }
-    });
-
-    res.json({ 
-      message: "Upload successful", 
-      count: leadsToInsert.length 
-    });
-
+    res.json({ message: "Upload processed successfully", count: leadsToInsert.length });
   } catch (error) {
-    console.log("UPLOAD ERROR:", error);
-    res.status(500).json({ 
-      error: "Internal Server Error during upload", 
-      details: error.message 
-    });
+    console.log("CRITICAL UPLOAD ERROR:", error);
+    res.status(500).json({ error: "Server error during upload" });
   }
 };
 
-// @desc    Get leads with pagination
-// @route   GET /api/leads
+// @desc    Get leads with pagination (Optimized for speed)
 exports.getLeads = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
     const query = req.user.role === "admin" ? {} : { agentId: req.user.id };
 
-    const leads = await Lead.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
-
-    const total = await Lead.countDocuments(query);
+    const [leads, total] = await Promise.all([
+      Lead.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Lead.countDocuments(query)
+    ]);
 
     res.json({
       leads,
-      pagination: {
-        total,
-        page,
-        pages: Math.ceil(total / limit)
-      }
+      pagination: { total, page, pages: Math.ceil(total / limit) }
     });
+  } catch (err) {
+    console.log("GET LEADS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// @desc    Delete lead with logging
+exports.deleteLead = async (req, res) => {
+  try {
+    const { reason } = req.body;
+    if (!reason) return res.status(400).json({ message: "Reason is required" });
+
+    const lead = await Lead.findById(req.params.id);
+    if (!lead) return res.status(404).json({ message: "Lead not found" });
+
+    // Step 1: Log (Safe serialization)
+    try {
+      await DeletedLog.create({
+        name: lead.name,
+        phone: lead.phone,
+        reason,
+        deletedBy: req.user.id,
+        deletedByName: req.user.name,
+        deletedAt: new Date(),
+        originalData: lead.toObject() 
+      });
+    } catch (logErr) {
+      console.log("Log creation failed (continuing deletion):", logErr.message);
+    }
+
+    // Step 2: Delete
+    await Lead.findByIdAndDelete(req.params.id);
+
+    res.json({ message: "Lead deleted successfully" });
+  } catch (err) {
+    console.log("DELETE ERROR:", err);
+    res.status(500).json({ error: "Failed to delete lead: " + err.message });
+  }
+};
+
+// @desc    Bulk Delete Leads by IDs
+exports.bulkDeleteLeads = async (req, res) => {
+  try {
+    const { ids, reason } = req.body;
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: "Selection is empty" });
+    }
+    if (!reason) return res.status(400).json({ message: "Reason is required" });
+
+    const leads = await Lead.find({ _id: { $in: ids } }).lean();
+    if (leads.length === 0) return res.status(404).json({ message: "No leads found to delete" });
+
+    // Step 1: Bulk Log
+    try {
+      const logs = leads.map(l => ({
+        name: l.name,
+        phone: l.phone,
+        reason: `[Bulk] ${reason}`,
+        deletedBy: req.user.id,
+        deletedByName: req.user.name,
+        deletedAt: new Date(),
+        originalData: l
+      }));
+      await DeletedLog.insertMany(logs, { ordered: false });
+    } catch (logErr) {
+      console.log("Bulk log failed:", logErr.message);
+    }
+
+    // Step 2: Bulk Delete
+    const result = await Lead.deleteMany({ _id: { $in: ids } });
+
+    res.json({ message: `Successfully deleted ${result.deletedCount} leads` });
+  } catch (err) {
+    console.log("BULK DELETE ERROR:", err);
+    res.status(500).json({ error: "Bulk delete failed: " + err.message });
+  }
+};
+
+
+
+// @desc    Get deleted logs grouped by day (Admin only)
+exports.getGroupedLogs = async (req, res) => {
+  try {
+    if (req.user.role !== "admin") return res.status(403).json({ message: "Not authorized" });
+
+    const grouped = await DeletedLog.aggregate([
+      {
+        $group: {
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$deletedAt" } },
+          count: { $sum: 1 },
+          logs: { $push: "$$ROOT" }
+        }
+      },
+      { $sort: { _id: -1 } }
+    ]);
+
+    res.json(grouped);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
+
+// @desc    Delete logs for a specific day
+exports.deleteLogsByDate = async (req, res) => {
+  try {
+    if (req.user.role !== "admin") return res.status(403).json({ message: "Not authorized" });
+    const { date } = req.body; // Format: YYYY-MM-DD
+    if (!date) return res.status(400).json({ message: "Date is required" });
+
+    const start = new Date(date);
+    const end = new Date(date);
+    end.setDate(end.getDate() + 1);
+
+    const result = await DeletedLog.deleteMany({
+      deletedAt: { $gte: start, $lt: end }
+    });
+
+    res.json({ message: `Successfully cleared ${result.deletedCount} logs for ${date}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// @desc    Get deleted logs (Legacy fallback)
+exports.getDeletedLogs = async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    const logs = await DeletedLog.find().sort({ deletedAt: -1 }).limit(100).lean();
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+
 
 // @desc    Mark lead as tracked
 // @route   PATCH /api/leads/track/:id
@@ -157,14 +299,26 @@ exports.trackLead = async (req, res) => {
     const lead = await Lead.findById(req.params.id);
     if (!lead) return res.status(404).json({ message: "Lead not found" });
 
+    if (lead.status === "tracked") {
+      return res.status(400).json({ message: "Lead is already tracked" });
+    }
+
     lead.status = "tracked";
     await lead.save();
 
+    // Update agent's totalTricked stat for Admin dashboard
+    const User = require("../models/User");
+    await User.findByIdAndUpdate(req.user.id, {
+      $inc: { totalTricked: 1 }
+    });
+
     res.json({ message: "Lead tracked successfully", lead });
   } catch (err) {
+    console.log("TRACK ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
+
 
 // @desc    Send WhatsApp Message
 // @route   POST /api/leads/whatsapp
@@ -215,3 +369,4 @@ Team EcoPlug ⚡`;
     });
   }
 };
+
